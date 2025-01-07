@@ -1,0 +1,42 @@
+Base line for Student Assessment System
+----------------------------------------
+root.title('Student Assessment System')
+root.geometry('747x412')
+root.configure(background='#008B8B')
+root.resizable(False, False)
+----------------------------------------
+Module 1: Answer Verification
+Input: Accept answer keys and student answers.
+Features:
+Mark Allocation: Compare answers with the key and allocate marks.
+Plagiarism Detection:
+Integrate APIs/tools (e.g., Turnitin API).
+Highlight plagiarized sections with sources.
+Malpractice Detection:
+Compare answers among students to detect duplicates.
+----------------------------------------
+Module 2: Assignment Verification
+Input: Accept assignments in formats like PDF or DOCX.
+Features:
+Assignment Validation:
+Validate structure (word count, formatting, etc.).
+Plagiarism Detection:
+Identify content similarity with online sources.
+Highlight suspicious sections.
+Malpractice Detection:
+Detect duplicate submissions between students.
+
+Improvements:
+Check/compare assignments within classmates
+Check for AI-content validation
+Validate assignment for both human reports and code based submissions
+Support multi-format file submissions (PDF,DOCX,JPG,JPEG,PNG)
+advanced NLP techniques for accuracy
+
+Steps:
+interface/UI tkinder
+Option to upload assignment
+option to: compare peer-to-peer classmates,
+compare from online material,
+compare AI-content,
+Generate report with the options chosen in txt

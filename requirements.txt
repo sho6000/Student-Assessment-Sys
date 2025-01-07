@@ -1,5 +1,5 @@
-python-dotenv
-google-generativeai
-
-
-# pip install -r requirements.txt
+mysql_connector_repackaged==0.3.1
+protobuf==5.29.2
+PyPDF2==3.0.1
+python-dotenv==1.0.1
+scikit_learn==1.6.0
