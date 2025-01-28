@@ -1,248 +1,332 @@
 import tkinter as tk
-from tkinter import ttk
-from tkinter import *
-from tkinter import filedialog, messagebox
+from tkinter import messagebox, filedialog, ttk
+from tkinter import font, Text, Button, Frame, Tk, Checkbutton, BooleanVar
 import os
-import mysql.connector
-from mysql.connector import Error
-from peer_comparison import compare_files  # Import the peer-to-peer comparison function
-from plagiarism_check import check_plagiarism  # Import the plagiarism check function
-from ai_content import detect_ai_content  # Import the AI content detection function
+# import mysql.connector
+# from mysql.connector import Error
+from peer_comparison import compare_files
+from plagiarism_check import check_plagiarism
+from ai_content import detect_ai_content
+from ocr import perform_ocr, save_ocr_result
 
+class StudentAssessmentApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Student Assessment System")
+        
+        # Increase window size for better layout
+        self.root.geometry("800x600")
+        self.root.config(bg="#f4f4f9")
+        
+        # Store uploaded file paths
+        self.assignment_file_paths = []
+        self.submission_file = ""
+        self.answer_key_file = ""
+        self.format_key_file = ""
+        
+        self.label_font = font.Font(family="Helvetica", size=12, weight="bold")
+        self.button_font = font.Font(family="Helvetica", size=10, weight="normal")
+        self.text_font = font.Font(family="Courier New", size=10)
+        
+        self.create_widgets()
 
-assignment_file_paths = []  # Global variable to hold the uploaded file paths
-
-# load animation BEGIN
-def slowly_load_report():
-    """
-    Simulates a loading animation in the log area, one block at a time.
-    """
-    # log_area.insert(tk.END, "\nGenerating new report ")
-    loading_blocks = "■ " * 58  # Adjust the number of blocks as needed
-    load_animation(loading_blocks, 0)  # Start the animation
-
-def load_animation(loading_blocks, index):
-    """
-    Adds one block at a time to the loading message.
-    """
-    if index < len(loading_blocks):
-        log_area.insert(tk.END, loading_blocks[index])  # Insert one block
-        log_area.see(tk.END)  # Auto-scroll to the end
-        root.after(200, load_animation, loading_blocks, index + 1)  # Continue after 200ms
-    else:
-        # log_area.insert(tk.END, "\nLoading complete!\n")  # Final message
-        log_area.see(tk.END)
-# load animation END
-
-def connect_to_db():
-    try:
-        connection = mysql.connector.connect(
-            host='localhost',  # Change as needed
-            user='root',       # Replace with your MySQL username
-            password='asusi7',  # Replace with your MySQL password
-            database=''
+    def create_widgets(self):
+        # Main title
+        self.title_label = tk.Label(
+            self.root, 
+            text="Student Assessment System",
+            font=("Helvetica", 24, "bold"),
+            bg="#f4f4f9",
+            fg="#2c3e50"
         )
-        if connection.is_connected():
-            return connection
-    except Error as e:
-        # messagebox.showerror("Error", f"Database connection failed: {e}")
-        log_area.insert(tk.END, f"Database connection failed: {e}\n")
-        return None
+        self.title_label.pack(pady=20)
 
+        # Create notebook for tabs
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(expand=True, fill='both', padx=20, pady=10)
 
-def upload_assignment_file():
-
-    """
-    Handles the upload of assignment files and manages the state of the peer-to-peer checkbox.
-    """
-    global assignment_file_paths
-    file_paths = filedialog.askopenfilenames(
-        filetypes=[("PDF Files", "*.pdf"), ("DOCX Files", "*.docx"), ("Text Files", "*.txt")]
-    )
-    new_files = list(file_paths)
-    assignment_file_paths.extend(new_files)
-    
-
-    # Log uploaded files
-    for file_path in new_files:
-        log_area.insert(tk.END, f"Uploaded assignment file: {os.path.basename(file_path)}\n")
-    
-    # Check if more than two PDF files are uploaded
-    pdf_count = sum(1 for path in assignment_file_paths if path.endswith(".pdf"))
-    if pdf_count > 2:
-        peer_checkbox.config(state=tk.DISABLED)
-        log_area.insert(tk.END, "Peer-to-peer comparison disabled: More than two files cant't be compared.\n")
-    else:
-        peer_checkbox.config(state=tk.NORMAL)
-
-
-
-def generate_assignment_report():
-    """
-    Generates an assignment report based on user options.
-    """
-    if not assignment_file_paths:
-        log_area.insert(tk.END, "Error: No assignment files uploaded.\n")
-        return
-    
-    # Clear existing logs to avoid duplicate outputs
-    log_area.insert(tk.END, "\nGenerating new report...\n")
-    
-    try:
-        # Perform peer-to-peer comparison if selected
-        if checkbox_var.get():
-            if len(assignment_file_paths) < 2:
-                log_area.insert(tk.END, "\nError: At least two files are required for peer-to-peer comparison.\n")
-            else:
-                results = compare_files(assignment_file_paths)
-                log_area.insert(tk.END, "\n=== Peer-to-Peer Comparison Results ===\n")
-                for (file1, file2), similarity in results.items():
-                    log_area.insert(tk.END, f"\nComparing files:\n")
-                    log_area.insert(tk.END, f"- File 1: {os.path.basename(file1)}\n")
-                    log_area.insert(tk.END, f"- File 2: {os.path.basename(file2)}\n")
-                    log_area.insert(tk.END, f"- Similarity: {similarity*100:.2f}%\n")
+        # Create tabs
+        self.answer_tab = ttk.Frame(self.notebook)
+        self.assignment_tab = ttk.Frame(self.notebook)
         
-        # Perform plagiarism check if selected
-        if online_var.get():
-            plagiarism_results = check_plagiarism(assignment_file_paths)
-            log_area.insert(tk.END, "\n=== Plagiarism Check Results ===\n")
-            for file_path, result in plagiarism_results.items():
-                log_area.insert(tk.END, f"\n{os.path.basename(file_path)}:\n{result}\n")
+        self.notebook.add(self.answer_tab, text='Answer Verification')
+        self.notebook.add(self.assignment_tab, text='Assignment Verification')
+
+        # Setup both tabs
+        self.setup_answer_tab()
+        self.setup_assignment_tab()
+
+    def setup_assignment_tab(self):
+        # Upload frame
+        upload_frame = ttk.LabelFrame(self.assignment_tab, text="Upload Files", padding=20)
+        upload_frame.pack(fill='x', padx=20, pady=10)
+
+        # File upload button
+        ttk.Button(
+            upload_frame,
+            text="Upload Assignment Files",
+            command=self.upload_assignment_file,
+            style='Accent.TButton'
+        ).pack(side='left', padx=5)
+
+        # OCR button
+        ttk.Button(
+            upload_frame,
+            text="Convert to Text (OCR)",
+            command=self.perform_ocr_conversion,
+            style='Accent.TButton'
+        ).pack(side='left', padx=5)
+
+        # Clear buttons
+        ttk.Button(
+            upload_frame,
+            text="Reset",
+            command=self.clear_log_screen,
+            style='Accent.TButton'
+        ).pack(side='right', padx=5)
         
-        # Perform AI content detection if selected
-        if ai_var.get():
-            ai_results = detect_ai_content(assignment_file_paths)
-            log_area.insert(tk.END, "\n=== AI Content Detection Results ===\n")
-            for file_path, result in ai_results.items():
-                filename = os.path.basename(file_path)
-                if result['status'] == 'success':
-                    log_area.insert(tk.END, f"\n{filename}:\n")
-                    log_area.insert(tk.END, f"- AI Content: {result['ai_percentage']}%\n")
-                    log_area.insert(tk.END, f"- Content Length: {result['content_length']} characters\n")
+        ttk.Button(
+            upload_frame,
+            text="Clear Log",
+            command=self.erase_log,
+            style='Accent.TButton'
+        ).pack(side='right', padx=5)
+
+        # Checkbox frame
+        checkbox_frame = ttk.LabelFrame(self.assignment_tab, text="Verification Options", padding=10)
+        checkbox_frame.pack(fill='x', padx=20, pady=10)
+
+        # Checkboxes
+        self.checkbox_var = BooleanVar()
+        self.online_var = BooleanVar()
+        self.ai_var = BooleanVar()
+
+        ttk.Checkbutton(
+            checkbox_frame,
+            text="Compare Peer-to-Peer",
+            variable=self.checkbox_var
+        ).pack(side='left', padx=10)
+
+        ttk.Checkbutton(
+            checkbox_frame,
+            text="Plagiarism Check",
+            variable=self.online_var
+        ).pack(side='left', padx=10)
+
+        ttk.Checkbutton(
+            checkbox_frame,
+            text="Detect AI-Generated Content",
+            variable=self.ai_var
+        ).pack(side='left', padx=10)
+
+        # Generate report button
+        ttk.Button(
+            self.assignment_tab,
+            text="Generate Report",
+            command=self.generate_assignment_report,
+            style='Accent.TButton'
+        ).pack(pady=10)
+
+        # Log area
+        log_frame = ttk.LabelFrame(self.assignment_tab, text="Processing Log", padding=20)
+        log_frame.pack(fill='both', expand=True, padx=20, pady=10)
+
+        self.log_area = Text(
+            log_frame,
+            height=10,
+            width=50,
+            font=self.text_font,
+            wrap="word",
+            bg='white',
+            fg='black'
+        )
+        self.log_area.pack(fill='both', expand=True)
+
+    def setup_answer_tab(self):
+        # Frame for file uploads
+        upload_frame = ttk.LabelFrame(self.answer_tab, text="Upload Files", padding=20)
+        upload_frame.pack(fill='x', padx=20, pady=10)
+
+        # Submission upload section
+        submission_frame = ttk.Frame(upload_frame)
+        submission_frame.pack(fill='x', pady=5)
+        
+        ttk.Label(submission_frame, text="Student Answer:", font=self.label_font).pack(side='left')
+        self.submission_label = ttk.Label(submission_frame, text="No file selected", font=self.text_font)
+        self.submission_label.pack(side='left', padx=10)
+        ttk.Button(
+            submission_frame,
+            text="Choose File",
+            command=self.upload_submission,
+            style='Accent.TButton'
+        ).pack(side='right')
+
+        # Answer key upload section
+        key_frame = ttk.Frame(upload_frame)
+        key_frame.pack(fill='x', pady=5)
+        
+        ttk.Label(key_frame, text="Answer Key:", font=self.label_font).pack(side='left')
+        self.answer_key_label = ttk.Label(key_frame, text="No file selected", font=self.text_font)
+        self.answer_key_label.pack(side='left', padx=10)
+        ttk.Button(
+            key_frame,
+            text="Choose File",
+            command=self.upload_answer_key,
+            style='Accent.TButton'
+        ).pack(side='right')
+
+        # Evaluate button
+        ttk.Button(
+            self.answer_tab,
+            text="Evaluate Answer",
+            command=self.evaluate_submission,
+            style='Accent.TButton'
+        ).pack(pady=20)
+
+        # Report section
+        report_frame = ttk.LabelFrame(self.answer_tab, text="Evaluation Report", padding=20)
+        report_frame.pack(fill='both', expand=True, padx=20, pady=10)
+
+        self.report_text = Text(
+            report_frame,
+            height=10,
+            width=50,
+            font=self.text_font,
+            wrap="word",
+            bg='white',
+            fg='black'
+        )
+        self.report_text.pack(fill='both', expand=True)
+
+    # Methods from the original UI
+    def upload_assignment_file(self):
+        file_paths = filedialog.askopenfilenames(
+            filetypes=[("PDF Files", "*.pdf"), ("DOCX Files", "*.docx"), ("Text Files", "*.txt")]
+        )
+        new_files = list(file_paths)
+        self.assignment_file_paths.extend(new_files)
+        
+        for file_path in new_files:
+            self.log_area.insert(tk.END, f"Uploaded assignment file: {os.path.basename(file_path)}\n")
+        
+        pdf_count = sum(1 for path in self.assignment_file_paths if path.endswith(".pdf"))
+        if pdf_count > 2:
+            self.checkbox_var.set(False)
+            self.log_area.insert(tk.END, "Peer-to-peer comparison disabled: More than two files can't be compared.\n")
+
+    def upload_submission(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=(("Text Files", "*.txt"), ("PDF Files", "*.pdf"), ("All Files", "*.*"))
+        )
+        if file_path:
+            self.submission_label.config(text=file_path.split('/')[-1])
+            messagebox.showinfo("Success", "Answer file uploaded successfully!")
+
+    def upload_answer_key(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=(("Text Files", "*.txt"), ("PDF Files", "*.pdf"), ("All Files", "*.*"))
+        )
+        if file_path:
+            self.answer_key_label.config(text=file_path.split('/')[-1])
+            messagebox.showinfo("Success", "Answer key uploaded successfully!")
+
+    # Existing methods from previous implementation
+    def generate_assignment_report(self):
+        if not self.assignment_file_paths:
+            self.log_area.insert(tk.END, "Error: No assignment files uploaded.\n")
+            return
+        
+        self.log_area.insert(tk.END, "\nGenerating new report...\n")
+        
+        try:
+            # Peer-to-peer comparison
+            if self.checkbox_var.get():
+                if len(self.assignment_file_paths) < 2:
+                    self.log_area.insert(tk.END, "\nError: At least two files are required for peer-to-peer comparison.\n")
                 else:
-                    log_area.insert(tk.END, f"\n{filename}: Error - {result['error_message']}\n")
+                    results = compare_files(self.assignment_file_paths)
+                    self.log_area.insert(tk.END, "\n=== Peer-to-Peer Comparison Results ===\n")
+                    for (file1, file2), similarity in results.items():
+                        self.log_area.insert(tk.END, f"\nComparing files:\n")
+                        self.log_area.insert(tk.END, f"- File 1: {os.path.basename(file1)}\n")
+                        self.log_area.insert(tk.END, f"- File 2: {os.path.basename(file2)}\n")
+                        self.log_area.insert(tk.END, f"- Similarity: {similarity*100:.2f}%\n")
+            
+            # Plagiarism check
+            if self.online_var.get():
+                plagiarism_results = check_plagiarism(self.assignment_file_paths)
+                self.log_area.insert(tk.END, "\n=== Plagiarism Check Results ===\n")
+                for file_path, result in plagiarism_results.items():
+                    self.log_area.insert(tk.END, f"\n{os.path.basename(file_path)}:\n{result}\n")
+            
+            # AI content detection
+            if self.ai_var.get():
+                ai_results = detect_ai_content(self.assignment_file_paths)
+                self.log_area.insert(tk.END, "\n=== AI Content Detection Results ===\n")
+                for file_path, result in ai_results.items():
+                    filename = os.path.basename(file_path)
+                    if result['status'] == 'success':
+                        self.log_area.insert(tk.END, f"\n{filename}:\n")
+                        self.log_area.insert(tk.END, f"- AI Content: {result['ai_percentage']}%\n")
+                        self.log_area.insert(tk.END, f"- Content Length: {result['content_length']} characters\n")
+                    else:
+                        self.log_area.insert(tk.END, f"\n{filename}: Error - {result['error_message']}\n")
         
-    except Exception as e:
-        log_area.insert(tk.END, f"Error: An issue occurred during the report generation. Details: {e}\n")
+        except Exception as e:
+            self.log_area.insert(tk.END, f"Error: An issue occurred during the report generation. Details: {e}\n")
 
+    def evaluate_submission(self):
+        report = "Evaluation Report:\n" + "="*20 + "\n\n"
+        report += "Placeholder evaluation content\n"
+        
+        self.report_text.delete(1.0, tk.END)
+        self.report_text.insert(tk.END, report)
+        messagebox.showinfo("Success", "Evaluation completed successfully!")
 
-    else:
-        # Handle single-file report generation
-        report_content = f"Assignment File: {os.path.basename(assignment_file_paths[0])}\n"
-        report_content += "Assignment verification results: [Placeholder]\n"
-        # log_area.insert(tk.END, report_content)
-        # save_report(report_content)
+    def clear_log_screen(self):
+        self.log_area.delete(1.0, tk.END)
+        self.assignment_file_paths = []
+        self.checkbox_var.set(False)
+        self.log_area.insert(tk.END, "App resetted...\n")
 
-# # Helper function to save report
-# def save_report(content):
-#     report_path = filedialog.asksaveasfilename(
-#         defaultextension=".txt",
-#         filetypes=[("Text Files", "*.txt")],
-#     )
-#     if report_path:
-#         with open(report_path, "w") as report_file:
-#             report_file.write(content)
-#         log_area.insert(tk.END, f"Report saved to: {report_path}\n")
-#     else:
-#         log_area.insert(tk.END, "Report saving canceled by user.\n")
+    def erase_log(self):
+        self.log_area.delete(1.0, tk.END)
+        self.log_area.insert(tk.END, "Log cleared...\n")
 
-# Function to clear the log screen
-def clear_log_screen():
-    """
-    Clears the log screen, resets the file paths, and re-enables the peer-to-peer checkbox.
-    """
-    # Clear the log area
-    log_area.delete(1.0, tk.END)
-    
-    # Reset the file paths list
-    global assignment_file_paths
-    assignment_file_paths = []  # Reset the uploaded files
-    
-    # Re-enable the peer-to-peer checkbox
-    peer_checkbox.config(state=tk.NORMAL)  # Reset to normal state
-    
-    # Log reset action
-    log_area.insert(tk.END, "App resetted...\n")
+    def perform_ocr_conversion(self):
+        if not self.assignment_file_paths:
+            self.log_area.insert(tk.END, "Error: No files uploaded for OCR conversion.\n")
+            return
+        
+        self.log_area.insert(tk.END, "\nStarting OCR conversion...\n")
+        
+        for file_path in self.assignment_file_paths:
+            filename = os.path.basename(file_path)
+            self.log_area.insert(tk.END, f"\nProcessing: {filename}\n")
+            
+            text, error = perform_ocr(file_path, lambda msg: self.log_area.insert(tk.END, msg))
+            
+            if error:
+                self.log_area.insert(tk.END, f"Error processing {filename}: {error}\n")
+                continue
+            
+            output_path = os.path.splitext(file_path)[0] + "_ocr.txt"
+            if save_ocr_result(text, output_path):
+                self.log_area.insert(tk.END, f"OCR result saved to: {os.path.basename(output_path)}\n")
+            else:
+                self.log_area.insert(tk.END, f"Error saving OCR result for {filename}\n")
+        
+        self.log_area.insert(tk.END, "\nOCR conversion completed!\n")
 
-def erase_log():
-    log_area.delete(1.0, tk.END)
-    log_area.insert(tk.END, "Log cleared...\n")
+# Configure style
+def configure_styles():
+    style = ttk.Style()
+    style.configure('Accent.TButton', font=('Helvetica', 10))
+    return style
 
-
-
-# Create the main window
-root = Tk()
-root.geometry('638x356')
-root.configure(background='#53868B')
-root.title('SAS')
-#root.resizable(False, False)
-
-# Create a style object
-style = ttk.Style()
-
-# Configure the style for the notebook tabs
-style.configure("TNotebook.Tab", 
-                foreground="black",  # Tab text color
-                background="#53868B",  # Tab background color
-                padding=[10, 5])  # Padding for the text
-
-# Create a Notebook widget (for tabs)
-notebook = ttk.Notebook(root)
-
-# Create two frames (one for each tab)
-assignment_tab = Frame(notebook, bg='#53868B')
-tab2 = Frame(notebook, bg='#53868B')
-
-# Add the tabs to the notebook
-notebook.add(assignment_tab, text='Assignment Verification', padding=5) 
-notebook.add(tab2, text='Answer Verification', padding=5)
-
-# Layout for the first tab (Assignment Verification)
-top_layout = Frame(assignment_tab, bg='#53868B', pady=10)
-top_layout.pack(fill='x', padx=10)
-
-# File upload button
-upload_button = Button(top_layout, text="Upload Assignment File", command=upload_assignment_file)
-upload_button.pack(side='left', padx=10)
-
-# Frame for checkboxes (placed on the next line)
-checkbox_layout = Frame(assignment_tab, bg='#53868B', pady=10)
-checkbox_layout.pack(fill='x', padx=10)
-
-# Clear log button
-clear_button = Button(top_layout, text="Reset", command=clear_log_screen, bg="#FF5733")
-clear_button.pack(side='right', padx=5)
-erase_button = Button(top_layout, text="Clear Log", command=erase_log, bg="#FFA500")
-erase_button.pack(side='right', padx=5)
-
-# Checkbox below the upload button
-checkbox_var = tk.BooleanVar()
-online_var = tk.BooleanVar()
-ai_var = tk.BooleanVar()
-
-peer_checkbox = Checkbutton(checkbox_layout, text="Compare Peer-to-Peer", variable=checkbox_var, bg='#53868B', fg='black')
-peer_checkbox.pack(side='left', padx=10)
-
-online_checkbox = Checkbutton(checkbox_layout, text="Plagiarism Check", variable=online_var, bg='#53868B', fg='black')
-online_checkbox.pack(side='left', padx=10)
-
-ai_checkbox = Checkbutton(checkbox_layout, text="Detect AI-Generated Content", variable=ai_var, bg='#53868B', fg='black')
-ai_checkbox.pack(side='left', padx=10)
-
-# Generate report button
-generate_button = Button(top_layout, text="Generate Report", command=generate_assignment_report, bg="#4CAF50")
-generate_button.pack(side='left', padx=10)
-
-# Log area at the bottom
-bottom_layout = Frame(assignment_tab, bg='#53868B')
-bottom_layout.pack(fill='both', padx=10, pady=10, expand=True)
-
-# Logs Text widget
-log_area = Text(bottom_layout, height=8, width=70, wrap=tk.WORD, bg='black', fg='white', bd=3)
-log_area.pack(fill='both', expand=True)
-
-# Pack the notebook into the main window
-notebook.pack(fill='both', expand=True)
-
-# Start the main loop
-root.mainloop()
+# Main application
+if __name__ == "__main__":
+    root = tk.Tk()
+    style = configure_styles()
+    app = StudentAssessmentApp(root)
+    root.mainloop()
