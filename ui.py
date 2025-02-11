@@ -8,6 +8,9 @@ from peer_comparison import compare_files
 from plagiarism_check import check_plagiarism
 from ai_content import detect_ai_content
 from ocr import perform_ocr, save_ocr_result
+# from sentence_transformers import SentenceTransformer, util
+# import re
+from ans_eval import evaluate_answers
 
 class StudentAssessmentApp:
     def __init__(self, root):
@@ -200,26 +203,25 @@ class StudentAssessmentApp:
 
     # Methods from the original UI
     def upload_assignment_file(self):
-        file_paths = filedialog.askopenfilenames(
-            filetypes=[("PDF Files", "*.pdf"), ("DOCX Files", "*.docx"), ("Text Files", "*.txt")]
-        )
-        new_files = list(file_paths)
-        self.assignment_file_paths.extend(new_files)
-        
-        for file_path in new_files:
-            self.log_area.insert(tk.END, f"Uploaded assignment file: {os.path.basename(file_path)}\n")
-        
-        pdf_count = sum(1 for path in self.assignment_file_paths if path.endswith(".pdf"))
-        if pdf_count > 2:
-            self.checkbox_var.set(False)
-            self.log_area.insert(tk.END, "Peer-to-peer comparison disabled: More than two files can't be compared.\n")
+        file_paths = filedialog.askopenfilenames(title="Select Assignment Files", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+
+        for file_path in file_paths:
+            if file_path not in self.assignment_file_paths:
+                self.assignment_file_paths.append(file_path)
+                self.log_area.insert(tk.END, f"Uploaded: {os.path.basename(file_path)}\n")
+            else:
+                self.log_area.insert(tk.END, f"File already uploaded: {os.path.basename(file_path)}\n")
+
+        if not self.assignment_file_paths:
+            self.log_area.insert(tk.END, "No files were selected.\n")
 
     def upload_submission(self):
         file_path = filedialog.askopenfilename(
             filetypes=(("Text Files", "*.txt"), ("PDF Files", "*.pdf"), ("All Files", "*.*"))
         )
         if file_path:
-            self.submission_label.config(text=file_path.split('/')[-1])
+            self.submission_file = file_path  # Store the full path
+            self.submission_label.config(text=os.path.basename(file_path))
             messagebox.showinfo("Success", "Answer file uploaded successfully!")
 
     def upload_answer_key(self):
@@ -227,7 +229,8 @@ class StudentAssessmentApp:
             filetypes=(("Text Files", "*.txt"), ("PDF Files", "*.pdf"), ("All Files", "*.*"))
         )
         if file_path:
-            self.answer_key_label.config(text=file_path.split('/')[-1])
+            self.answer_key_file = file_path  # Store the full path
+            self.answer_key_label.config(text=os.path.basename(file_path))
             messagebox.showinfo("Success", "Answer key uploaded successfully!")
 
     # Existing methods from previous implementation
@@ -235,9 +238,9 @@ class StudentAssessmentApp:
         if not self.assignment_file_paths:
             self.log_area.insert(tk.END, "Error: No assignment files uploaded.\n")
             return
-        
+    
         self.log_area.insert(tk.END, "\nGenerating new report...\n")
-        
+    
         try:
             # Peer-to-peer comparison
             if self.checkbox_var.get():
@@ -246,19 +249,23 @@ class StudentAssessmentApp:
                 else:
                     results = compare_files(self.assignment_file_paths)
                     self.log_area.insert(tk.END, "\n=== Peer-to-Peer Comparison Results ===\n")
-                    for (file1, file2), similarity in results.items():
-                        self.log_area.insert(tk.END, f"\nComparing files:\n")
-                        self.log_area.insert(tk.END, f"- File 1: {os.path.basename(file1)}\n")
-                        self.log_area.insert(tk.END, f"- File 2: {os.path.basename(file2)}\n")
-                        self.log_area.insert(tk.END, f"- Similarity: {similarity*100:.2f}%\n")
-            
+                
+                    for files, similarity in results.items():
+                        if len(files) == 2:
+                            file1, file2 = files
+                            self.log_area.insert(tk.END, f"Comparing:\n - File 1: {os.path.basename(file1)}\n")
+                            self.log_area.insert(tk.END, f" - File 2: {os.path.basename(file2)}\n")
+                            self.log_area.insert(tk.END, f" - Similarity: {similarity * 100:.2f}%\n")
+                        else:
+                            self.log_area.insert(tk.END, "Unexpected result structure in peer comparison.\n")
+        
             # Plagiarism check
             if self.online_var.get():
                 plagiarism_results = check_plagiarism(self.assignment_file_paths)
                 self.log_area.insert(tk.END, "\n=== Plagiarism Check Results ===\n")
                 for file_path, result in plagiarism_results.items():
                     self.log_area.insert(tk.END, f"\n{os.path.basename(file_path)}:\n{result}\n")
-            
+        
             # AI content detection
             if self.ai_var.get():
                 ai_results = detect_ai_content(self.assignment_file_paths)
@@ -271,17 +278,33 @@ class StudentAssessmentApp:
                         self.log_area.insert(tk.END, f"- Content Length: {result['content_length']} characters\n")
                     else:
                         self.log_area.insert(tk.END, f"\n{filename}: Error - {result['error_message']}\n")
-        
+    
         except Exception as e:
             self.log_area.insert(tk.END, f"Error: An issue occurred during the report generation. Details: {e}\n")
 
+
     def evaluate_submission(self):
-        report = "Evaluation Report:\n" + "="*20 + "\n\n"
-        report += "Placeholder evaluation content\n"
-        
-        self.report_text.delete(1.0, tk.END)
-        self.report_text.insert(tk.END, report)
-        messagebox.showinfo("Success", "Evaluation completed successfully!")
+        # Check if files are uploaded
+        if not self.submission_file or not self.answer_key_file:
+            messagebox.showerror("Error", "Both the student answer and the answer key must be uploaded!")
+            return
+
+        # Call the evaluation function with the stored file paths
+        result = evaluate_answers(self.submission_file, self.answer_key_file)
+
+        # Display the results
+        if result["status"] == "success":
+            report = "Evaluation Report:\n" + "="*20 + "\n\n"
+            report += f"Overall Score: {result['overall_score']:.2f}%\n\n"
+            report += "Detailed Analysis:\n" + "-"*20 + "\n"
+            report += "\n".join(result["details"])
+            
+            self.report_text.delete(1.0, tk.END)
+            self.report_text.insert(tk.END, report)
+            messagebox.showinfo("Success", "Evaluation completed successfully!")
+        else:
+            messagebox.showerror("Error", f"Evaluation failed: {result['message']}")
+
 
     def clear_log_screen(self):
         self.log_area.delete(1.0, tk.END)
