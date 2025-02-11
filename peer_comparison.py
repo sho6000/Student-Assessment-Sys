@@ -23,6 +23,9 @@ def compare_files(file_paths):
     Compares the uploaded files for similarity using Cosine Similarity (TF-IDF).
     Compares each pair of files and returns a similarity score.
     """
+    if len(file_paths) < 2:
+        raise ValueError("At least two files are required for comparison.")
+    
     texts = []
     
     # Extract text from each PDF file
@@ -33,14 +36,14 @@ def compare_files(file_paths):
     vectorizer = TfidfVectorizer(stop_words='english')
     tfidf_matrix = vectorizer.fit_transform(texts)
     
-    # Calculate cosine similarity between the documents
-    cosine_sim = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:])
+    # Calculate pairwise cosine similarity for all files
+    cosine_sim = cosine_similarity(tfidf_matrix)
     
     # Store results in a dictionary
     similarity_results = {}
     for i, file1 in enumerate(file_paths):
         for j, file2 in enumerate(file_paths):
-            if i < j:  # Avoid duplicate comparisons
-                similarity_results[(file_paths[i], file_paths[j])] = cosine_sim[i][j-1]
+            if i < j:  # Avoid duplicate and self-comparisons
+                similarity_results[(file1, file2)] = cosine_sim[i][j]
     
     return similarity_results
