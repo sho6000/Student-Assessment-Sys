@@ -1,6 +1,6 @@
-# Credentials
+# Sensitive files
 key.json
 .env
 
-# Test files
+# Test directory
 test_files/
