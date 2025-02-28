@@ -9,6 +9,55 @@ from fpdf import FPDF
 import io
 from datetime import datetime
 
+# Initialize session states
+if 'ocr_results' not in st.session_state:
+    st.session_state.ocr_results = {}
+if 'last_files_count' not in st.session_state:
+    st.session_state.last_files_count = 0
+if 'checkboxes' not in st.session_state:
+    st.session_state.checkboxes = {
+        'peer_comparison': False,
+        'plagiarism_check': False,
+        'ai_detection': False
+    }
+
+def reset_checkboxes():
+    """Reset all checkboxes to unchecked state"""
+    st.session_state.checkboxes = {
+        'peer_comparison': False,
+        'plagiarism_check': False,
+        'ai_detection': False
+    }
+
+def reset_peer_comparison():
+    """Reset only the peer comparison checkbox"""
+    st.session_state.checkboxes['peer_comparison'] = False
+
+def clear_ocr_results():
+    """Clear OCR results from session state"""
+    st.session_state.ocr_results = {}
+
+def is_image_file(filename):
+    """Check if file is an image"""
+    image_extensions = {'.jpg', '.jpeg', '.png'}
+    return os.path.splitext(filename.lower())[1] in image_extensions
+
+def has_unprocessed_images(files):
+    """Check for unprocessed image files"""
+    return any(is_image_file(file.name) for file in files 
+              if file.name not in st.session_state.ocr_results)
+
+def process_ocr(file, progress_callback=None):
+    """Process a single file through OCR"""
+    temp_file = f"temp_{file.name}"
+    try:
+        with open(temp_file, "wb") as f:
+            f.write(file.getbuffer())
+        return perform_ocr(temp_file, progress_callback)
+    finally:
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+
 class PDF(FPDF):
     def header(self):
         # Add logo or header image if needed
@@ -45,6 +94,98 @@ def generate_pdf_report(results_data):
         buffer = io.BytesIO()
         pdf.output(buffer)
         return buffer.getvalue()
+
+def generate_peer_comparison(temp_files):
+    """Generate peer comparison section for the report"""
+    peer_results = []
+    results = compare_files(temp_files)
+    
+    for files, similarity in results.items():
+        if len(files) == 2:
+            file1, file2 = files
+            similarity_percentage = similarity * 100
+            peer_results.append(
+                f"Comparing {os.path.basename(file1)} with {os.path.basename(file2)}\n"
+                f"Similarity Score: {similarity_percentage:.1f}%\n"
+            )
+            
+            # Display results in UI
+            st.markdown("---")
+            st.markdown("### 📄 Similarity Results")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("📄 File 1:", os.path.basename(file1))
+                st.write("📄 File 2:", os.path.basename(file2))
+            with col2:
+                st.metric(
+                    "Similarity Score",
+                    f"{similarity_percentage:.1f}%",
+                    delta=None
+                )
+    
+    if peer_results:
+        return [{
+            'title': 'Peer-to-Peer Comparison Results',
+            'content': peer_results
+        }]
+    return []
+
+def generate_plagiarism_check(temp_files):
+    """Generate plagiarism check section for the report"""
+    plagiarism_results_list = []
+    st.markdown("### 🔍 Plagiarism Check Results")
+    
+    plagiarism_results = check_plagiarism(temp_files)
+    for file_path, result in plagiarism_results.items():
+        st.markdown(f"**File: {os.path.basename(file_path)}**")
+        st.info(result)
+        plagiarism_results_list.append(
+            f"File: {os.path.basename(file_path)}\n{result}\n"
+        )
+    
+    if plagiarism_results_list:
+        return [{
+            'title': 'Plagiarism Check Results',
+            'content': plagiarism_results_list
+        }]
+    return []
+
+def generate_ai_detection(temp_files):
+    """Generate AI detection section for the report"""
+    ai_results_list = []
+    st.markdown("### 🤖 AI Content Detection Results")
+    
+    ai_results = detect_ai_content(temp_files)
+    for file_path, result in ai_results.items():
+        filename = os.path.basename(file_path)
+        if result['status'] == 'success':
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**{filename}**")
+            with col2:
+                st.metric(
+                    "AI Content Probability",
+                    f"{result['ai_percentage']}%"
+                )
+            st.write(f"Content Length: {result['content_length']} characters")
+            
+            ai_results_list.append(
+                f"File: {filename}\n"
+                f"AI Content Probability: {result['ai_percentage']}%\n"
+                f"Content Length: {result['content_length']} characters\n"
+            )
+        else:
+            st.error(f"{filename}: Error - {result['error_message']}")
+            ai_results_list.append(
+                f"File: {filename}\nError: {result['error_message']}\n"
+            )
+    
+    if ai_results_list:
+        return [{
+            'title': 'AI Content Detection Results',
+            'content': ai_results_list
+        }]
+    return []
 
 def main():
     st.set_page_config(
@@ -127,7 +268,7 @@ def main():
     with tab2:
         st.header("Assignment Verification")
         
-        # File upload for assignments with expanded file types
+        # File upload for assignments
         uploaded_files = st.file_uploader(
             "Upload Assignment Files",
             type=["txt", "pdf", "docx", "doc", "jpg", "jpeg", "png"],
@@ -136,66 +277,104 @@ def main():
             help="Supported formats: Text, PDF, Word documents, and Images"
         )
 
+        # Check file count and manage checkbox states
+        current_files_count = len(uploaded_files) if uploaded_files else 0
+        
+        # Reset all checkboxes if all files are removed
+        if current_files_count == 0 and st.session_state.last_files_count > 0:
+            reset_checkboxes()
+        # Reset peer comparison if files are less than 2
+        elif current_files_count < 2 and st.session_state.last_files_count >= 2:
+            reset_peer_comparison()
+            
+        st.session_state.last_files_count = current_files_count
+
         # Verification options
         col1, col2, col3 = st.columns(3)
         with col1:
             peer_comparison = st.checkbox(
                 "Compare Peer-to-Peer",
                 disabled=len(uploaded_files or []) < 2,
-                help="Upload at least 2 files to enable peer comparison"
+                help="Upload at least 2 files to enable peer comparison",
+                value=st.session_state.checkboxes['peer_comparison'],
+                key='peer_check'
             )
         with col2:
-            plagiarism_check = st.checkbox("Plagiarism Check")
+            plagiarism_check = st.checkbox(
+                "Plagiarism Check",
+                value=st.session_state.checkboxes['plagiarism_check'],
+                key='plagiarism_check'
+            )
         with col3:
-            ai_detection = st.checkbox("Detect AI-Generated Content")
+            ai_detection = st.checkbox(
+                "Detect AI-Generated Content",
+                value=st.session_state.checkboxes['ai_detection'],
+                key='ai_check'
+            )
 
-        # Action buttons in one line
+        # Update checkbox states
+        st.session_state.checkboxes['peer_comparison'] = peer_comparison
+        st.session_state.checkboxes['plagiarism_check'] = plagiarism_check
+        st.session_state.checkboxes['ai_detection'] = ai_detection
+
+        # Action buttons
         col1, col2 = st.columns(2)
-        
         with col1:
-            ocr_clicked = st.button("Convert to Text (OCR)", use_container_width=True)
+            ocr_clicked = st.button("Convert Images to Text (OCR)", use_container_width=True)
         with col2:
             generate_clicked = st.button("Generate Report", use_container_width=True)
 
+        # Display current OCR results
+        if st.session_state.ocr_results:
+            with st.expander("OCR Results", expanded=True):
+                for filename, text in st.session_state.ocr_results.items():
+                    st.markdown(f"### 📄 {filename}")
+                    st.text_area(
+                        "Extracted Text",
+                        value=text,
+                        height=200,
+                        key=f"ocr_display_{filename}"
+                    )
+                    st.download_button(
+                        label=f"Download OCR result",
+                        data=text.encode('utf-8'),
+                        file_name=f"{os.path.splitext(filename)[0]}_ocr.txt",
+                        mime="text/plain;charset=utf-8",
+                        key=f"download_display_{filename}"
+                    )
+                    st.markdown("---")
+
         # Handle OCR conversion
-        if ocr_clicked:
-            if not uploaded_files:
-                st.error("Please upload files first!")
+        if ocr_clicked and uploaded_files:
+            image_files = [f for f in uploaded_files if is_image_file(f.name)]
+            if not image_files:
+                st.warning("No image files found to process. Upload JPG, JPEG, or PNG files.")
             else:
-                for uploaded_file in uploaded_files:
-                    temp_file = f"temp_{uploaded_file.name}"
-                    with open(temp_file, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
-
-                    text, error = perform_ocr(temp_file, lambda msg: st.write(msg))
-                    
+                progress_bar = st.progress(0)
+                total_files = len(image_files)
+                
+                for idx, file in enumerate(image_files):
+                    if not is_image_file(file.name):
+                        continue
+                        
+                    text, error = process_ocr(file, lambda msg: st.write(msg))
                     if error:
-                        st.error(f"Error processing {uploaded_file.name}: {error}")
+                        st.error(f"Error processing {file.name}: {error}")
                     else:
-                        output_path = os.path.splitext(temp_file)[0] + "_ocr.txt"
-                        if save_ocr_result(text, output_path):
-                            st.success(f"OCR result saved to: {os.path.basename(output_path)}")
-                            # Provide download button for OCR result
-                            with open(output_path, "r") as f:
-                                st.download_button(
-                                    label=f"Download OCR result for {uploaded_file.name}",
-                                    data=f.read(),
-                                    file_name=os.path.basename(output_path),
-                                    mime="text/plain"
-                                )
-                        else:
-                            st.error(f"Error saving OCR result for {uploaded_file.name}")
-
-                    os.remove(temp_file)
-                    if os.path.exists(output_path):
-                        os.remove(output_path)
+                        st.session_state.ocr_results[file.name] = text
+                    progress_bar.progress((idx + 1) / total_files)
+                
+                if st.session_state.ocr_results:
+                    st.success("Image processing completed successfully!")
 
         # Handle report generation
         if generate_clicked:
             if not uploaded_files:
                 st.error("Please upload files first!")
+            elif has_unprocessed_images(uploaded_files):
+                st.error("⚠️ Image files detected! Please use 'Convert Images to Text (OCR)' first.")
+                st.info("This ensures all files can be properly analyzed.")
             else:
-                # Create a container for all results
                 with st.container():
                     st.markdown("""
                         <style>
@@ -210,100 +389,30 @@ def main():
                     
                     st.markdown('<div class="report-container">', unsafe_allow_html=True)
                     
-                    # Save uploaded files temporarily
+                    # Process files and generate report
                     temp_files = []
+                    try:
                     for uploaded_file in uploaded_files:
                         temp_file = f"temp_{uploaded_file.name}"
+                            if uploaded_file.name in st.session_state.ocr_results:
+                                with open(temp_file, "w", encoding='utf-8') as f:
+                                    f.write(st.session_state.ocr_results[uploaded_file.name])
+                            else:
                         with open(temp_file, "wb") as f:
                             f.write(uploaded_file.getbuffer())
                         temp_files.append(temp_file)
 
-                    # Initialize results data for PDF
                     results_data = []
                     
-                    try:
-                        # Peer-to-peer comparison
+                        # Generate report sections based on selected options
                         if peer_comparison:
-                            peer_results = []
-                            st.markdown("### 🔄 Peer-to-Peer Comparison Results")
-                            with st.spinner('Comparing files...'):
-                                results = compare_files(temp_files)
-                                for files, similarity in results.items():
-                                    if len(files) == 2:
-                                        file1, file2 = files
-                                        st.markdown("---")
-                                        col1, col2 = st.columns(2)
-                                        with col1:
-                                            st.write("📄 File 1:", os.path.basename(file1))
-                                            st.write("📄 File 2:", os.path.basename(file2))
-                                        with col2:
-                                            similarity_percentage = similarity * 100
-                                            st.metric(
-                                                "Similarity Score",
-                                                f"{similarity_percentage:.1f}%",
-                                                delta=None
-                                            )
-                                        # Add to PDF results
-                                        peer_results.append(
-                                            f"Comparing {os.path.basename(file1)} with {os.path.basename(file2)}\n"
-                                            f"Similarity Score: {similarity_percentage:.1f}%\n"
-                                        )
-                            results_data.append({
-                                'title': 'Peer-to-Peer Comparison Results',
-                                'content': peer_results
-                            })
-
-                        # Plagiarism check
+                            results_data.extend(generate_peer_comparison(temp_files))
                         if plagiarism_check:
-                            plagiarism_results_list = []
-                            st.markdown("### 🔍 Plagiarism Check Results")
-                            plagiarism_results = check_plagiarism(temp_files)
-                            for file_path, result in plagiarism_results.items():
-                                st.markdown(f"**File: {os.path.basename(file_path)}**")
-                                st.info(result)
-                                # Add to PDF results
-                                plagiarism_results_list.append(
-                                    f"File: {os.path.basename(file_path)}\n{result}\n"
-                                )
-                            results_data.append({
-                                'title': 'Plagiarism Check Results',
-                                'content': plagiarism_results_list
-                            })
-
-                        # AI content detection
+                            results_data.extend(generate_plagiarism_check(temp_files))
                         if ai_detection:
-                            ai_results_list = []
-                            st.markdown("### 🤖 AI Content Detection Results")
-                            ai_results = detect_ai_content(temp_files)
-                            for file_path, result in ai_results.items():
-                                filename = os.path.basename(file_path)
-                                if result['status'] == 'success':
-                                    col1, col2 = st.columns(2)
-                                    with col1:
-                                        st.markdown(f"**{filename}**")
-                                    with col2:
-                                        st.metric(
-                                            "AI Content Probability",
-                                            f"{result['ai_percentage']}%"
-                                        )
-                                    st.write(f"Content Length: {result['content_length']} characters")
-                                    # Add to PDF results
-                                    ai_results_list.append(
-                                        f"File: {filename}\n"
-                                        f"AI Content Probability: {result['ai_percentage']}%\n"
-                                        f"Content Length: {result['content_length']} characters\n"
-                                    )
-                                else:
-                                    st.error(f"{filename}: Error - {result['error_message']}")
-                                    ai_results_list.append(
-                                        f"File: {filename}\nError: {result['error_message']}\n"
-                                    )
-                            results_data.append({
-                                'title': 'AI Content Detection Results',
-                                'content': ai_results_list
-                            })
+                            results_data.extend(generate_ai_detection(temp_files))
 
-                        # Generate PDF report
+                        # Generate and offer PDF download
                         if results_data:
                             pdf_bytes = generate_pdf_report(results_data)
                             st.download_button(
@@ -312,6 +421,10 @@ def main():
                                 file_name=f"analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                                 mime="application/pdf",
                             )
+                            # Clear OCR results after successful report generation
+                            clear_ocr_results()
+                        else:
+                            st.warning("Please select at least one analysis option.")
 
                     except Exception as e:
                         st.error(f"An error occurred during report generation: {str(e)}")

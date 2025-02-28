@@ -1,53 +1,97 @@
-import requests
-import base64
 import os
+from google.cloud import vision
+from pdf2image import convert_from_path
+import tempfile
+import io
+from PIL import Image
+
+# Initialize the Google Cloud Vision client
+client = vision.ImageAnnotatorClient.from_service_account_json('key.json')
 
 def perform_ocr(file_path, log_callback=None):
-    """Perform OCR using RapidAPI's handwriting recognition service"""
+    """Perform OCR using Google Cloud Vision API"""
     try:
-        # Read the image file as binary
-        with open(file_path, 'rb') as file:
-            image_data = file.read()
-        
-        # Convert image to base64
-        base64_image = base64.b64encode(image_data).decode('utf-8')
-        
-        url = "https://pen-to-print-handwriting-ocr.p.rapidapi.com/recognize/"
-        
-        # Prepare the payload
-        payload = {
-            "imageBase64": base64_image,
-            "includeSubScan": "0",
-            "Session": "string"
-        }
-        
-        # API headers
-        headers = {
-            "x-rapidapi-key": "161093014amsh6516ff8df6a5904p14c013jsnb056e3345b2d",
-            "x-rapidapi-host": "pen-to-print-handwriting-ocr.p.rapidapi.com",
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        
         if log_callback:
-            log_callback("Sending image for OCR processing...\n")
+            log_callback("Starting OCR processing...\n")
+
+        # Check file extension
+        file_ext = os.path.splitext(file_path)[1].lower()
         
-        # Make API request
-        response = requests.post(url, data=payload, headers=headers)
-        result = response.json()
+        # Handle PDF files
+        if file_ext == '.pdf':
+            if log_callback:
+                log_callback("Converting PDF to images...\n")
+            
+            try:
+                # Convert PDF to images
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    images = convert_from_path(file_path)
+                    text = ""
+                    
+                    for i, image in enumerate(images):
+                        if log_callback:
+                            log_callback(f"Processing page {i+1}...\n")
+                        
+                        # Convert PIL Image to bytes
+                        img_byte_arr = io.BytesIO()
+                        image.save(img_byte_arr, format='PNG')
+                        content = img_byte_arr.getvalue()
+                        
+                        # Create vision image object
+                        image = vision.Image(content=content)
+                        
+                        # Perform OCR
+                        response = client.document_text_detection(image=image)
+                        if response.error.message:
+                            raise Exception(response.error.message)
+                            
+                        text += response.full_text_annotation.text + "\n\n"
+                    
+                    return text.strip(), None
+                    
+            except Exception as e:
+                return None, f"PDF processing error: {str(e)}"
         
-        if 'text' in result:
-            return result['text'], None
+        # Handle image files
+        elif file_ext in ['.jpg', '.jpeg', '.png']:
+            if log_callback:
+                log_callback("Processing image...\n")
+            
+            try:
+                # Read image file
+                with open(file_path, 'rb') as image_file:
+                    content = image_file.read()
+                
+                # Create vision image object
+                image = vision.Image(content=content)
+                
+                # Perform OCR
+                response = client.document_text_detection(image=image)
+                if response.error.message:
+                    raise Exception(response.error.message)
+                
+                return response.full_text_annotation.text.strip(), None
+                
+            except Exception as e:
+                return None, f"Image processing error: {str(e)}"
+            
         else:
-            return None, "OCR failed to extract text"
+            return None, f"Unsupported file format: {file_ext}"
             
     except Exception as e:
         return None, f"Error during OCR: {str(e)}"
 
 def save_ocr_result(text, output_path):
-    """Save OCR result to file"""
+    """Save OCR result to file with UTF-8 encoding"""
     try:
-        with open(output_path, 'w', encoding='utf-8') as f:
+        # Ensure the text is properly encoded
+        if isinstance(text, bytes):
+            text = text.decode('utf-8', errors='replace')
+        
+        # Write with UTF-8 encoding and BOM for Windows compatibility
+        with open(output_path, 'w', encoding='utf-8-sig') as f:
             f.write(text)
         return True
-    except Exception:
+    except Exception as e:
+        print(f"Error saving OCR result: {str(e)}")
         return False
