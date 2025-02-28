@@ -1,5 +1,6 @@
 # Credentials
 key.json
+.env
 
 # Test files
 test_files/
