@@ -33,10 +33,18 @@ def generate_pdf_report(results_data):
         
         pdf.set_font('Arial', '', 11)
         for result in section['content']:
-            pdf.multi_cell(0, 10, result)
+            # Handle potential encoding issues by replacing problematic characters
+            clean_text = result.encode('latin-1', errors='replace').decode('latin-1')
+            pdf.multi_cell(0, 10, clean_text)
         pdf.ln(5)
 
-    return pdf.output(dest='S').encode('latin1')
+    try:
+        return pdf.output(dest='S').encode('latin-1')
+    except Exception as e:
+        # If encoding fails, try with a more robust approach
+        buffer = io.BytesIO()
+        pdf.output(buffer)
+        return buffer.getvalue()
 
 def main():
     st.set_page_config(

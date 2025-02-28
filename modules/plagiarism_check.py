@@ -12,7 +12,7 @@ def check_plagiarism(file_paths):
     """
     GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
     genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-2.0-flash')
 
     results = {}
 
@@ -41,7 +41,8 @@ def check_plagiarism(file_paths):
             {content}"""
 
             response = model.generate_content(prompt)
-            results[file_path] = response.text.strip()
+            response_text = response.text if hasattr(response, 'text') else str(response)
+            results[file_path] = response_text.strip()
 
         except Exception as e:
             results[file_path] = f"Error analyzing file: {str(e)}"

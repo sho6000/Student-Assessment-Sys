@@ -14,7 +14,7 @@ def detect_ai_content(file_paths):
     # Initialize Gemini API
     GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')  # Store your API key in environment variables
     genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-2.0-flash')
 
     results = {}
 
@@ -45,12 +45,18 @@ def detect_ai_content(file_paths):
             # Get response from Gemini
             response = model.generate_content(prompt)
             
-            # Extract percentage from response
-            ai_percentage = response.text.strip().rstrip('%')
+            # Extract percentage from response, ensuring we handle the response text properly
+            response_text = response.text if hasattr(response, 'text') else str(response)
+            ai_percentage = response_text.strip().rstrip('%')
+            
+            try:
+                percentage = float(ai_percentage)
+            except ValueError:
+                percentage = 0.0  # Default value if parsing fails
             
             # Store result with more detailed information
             results[file_path] = {
-                "ai_percentage": float(ai_percentage),
+                "ai_percentage": percentage,
                 "status": "success",
                 "content_length": len(content)
             }

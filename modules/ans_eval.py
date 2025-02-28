@@ -1,15 +1,19 @@
+# Load English language model
 import spacy
 from difflib import SequenceMatcher
 import re
+import en_core_web_sm
 
-# Load English language model
-try:
-    nlp = spacy.load('en_core_web_sm')
-except OSError:
-    import subprocess
-    print("Downloading language model...")
-    subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"], capture_output=True)
-    nlp = spacy.load('en_core_web_sm')
+
+#try:
+#    nlp = spacy.load('en_core_web_sm')
+#except OSError:
+#    import subprocess
+#    print("Downloading language model...")
+#    subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"], capture_output=True)
+#    nlp = spacy.load('en_core_web_sm')
+
+nlp = en_core_web_sm.load()
 
 def clean_text(text):
     """Clean text for comparison"""
