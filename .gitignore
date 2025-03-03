@@ -1,6 +1,0 @@
-# Sensitive files
-key.json
-.env
-
-# Test directory
-test_files/

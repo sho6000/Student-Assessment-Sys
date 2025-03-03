@@ -5,9 +5,13 @@ from modules.plagiarism_check import check_plagiarism
 from modules.ai_content import detect_ai_content
 from modules.ocr import perform_ocr, save_ocr_result
 from modules.ans_eval import evaluate_answers
+from modules.omr_processor import OMRProcessor
 from fpdf import FPDF
 import io
 from datetime import datetime
+import cv2
+import numpy as np
+import pandas as pd
 
 # Initialize session states
 if 'ocr_results' not in st.session_state:
@@ -20,6 +24,8 @@ if 'checkboxes' not in st.session_state:
         'plagiarism_check': False,
         'ai_detection': False
     }
+if 'omr_processor' not in st.session_state:
+    st.session_state.omr_processor = OMRProcessor()
 
 def reset_checkboxes():
     """Reset all checkboxes to unchecked state"""
@@ -187,6 +193,52 @@ def generate_ai_detection(temp_files):
         }]
     return []
 
+def process_omr(answer_sheet, correct_sheet):
+    """Process OMR sheets and return marks"""
+    try:
+        # Read the images
+        answer_img = cv2.imdecode(np.frombuffer(answer_sheet.read(), np.uint8), cv2.IMREAD_COLOR)
+        correct_img = cv2.imdecode(np.frombuffer(correct_sheet.read(), np.uint8), cv2.IMREAD_COLOR)
+        
+        # Reset file pointers
+        answer_sheet.seek(0)
+        correct_sheet.seek(0)
+        
+        # Convert to grayscale
+        answer_gray = cv2.cvtColor(answer_img, cv2.COLOR_BGR2GRAY)
+        correct_gray = cv2.cvtColor(correct_img, cv2.COLOR_BGR2GRAY)
+        
+        # Apply thresholding
+        _, answer_thresh = cv2.threshold(answer_gray, 127, 255, cv2.THRESH_BINARY)
+        _, correct_thresh = cv2.threshold(correct_gray, 127, 255, cv2.THRESH_BINARY)
+        
+        # Find contours (bubbles)
+        answer_contours, _ = cv2.findContours(answer_thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        correct_contours, _ = cv2.findContours(correct_thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Compare marked answers with correct answers
+        total_questions = len(correct_contours)
+        correct_answers = 0
+        
+        for ans_contour, corr_contour in zip(answer_contours, correct_contours):
+            # Calculate overlap
+            if cv2.matchShapes(ans_contour, corr_contour, cv2.CONTOURS_MATCH_I1, 0.0) < 0.1:
+                correct_answers += 1
+        
+        # Calculate score
+        score = (correct_answers / total_questions) * 100
+        return {
+            "status": "success",
+            "total_questions": total_questions,
+            "correct_answers": correct_answers,
+            "score": score
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
 def main():
     st.set_page_config(
         page_title="Student Assessment System",
@@ -196,9 +248,10 @@ def main():
     st.title("Student Assessment System")
 
     # Create tabs
-    tab1, tab2 = st.tabs([
+    tab1, tab2, tab3 = st.tabs([
         "Answer Sheets Verification", 
-        "Assignment Cross-Check Verification"
+        "Assignment Cross-Check Verification",
+        "OMR Test Analysis"
     ])
 
     # Answer Verification Tab
@@ -392,17 +445,17 @@ def main():
                     # Process files and generate report
                     temp_files = []
                     try:
-                    for uploaded_file in uploaded_files:
-                        temp_file = f"temp_{uploaded_file.name}"
+                        for uploaded_file in uploaded_files:
+                            temp_file = f"temp_{uploaded_file.name}"
                             if uploaded_file.name in st.session_state.ocr_results:
                                 with open(temp_file, "w", encoding='utf-8') as f:
                                     f.write(st.session_state.ocr_results[uploaded_file.name])
                             else:
-                        with open(temp_file, "wb") as f:
-                            f.write(uploaded_file.getbuffer())
-                        temp_files.append(temp_file)
+                                with open(temp_file, "wb") as f:
+                                    f.write(uploaded_file.getbuffer())
+                            temp_files.append(temp_file)
 
-                    results_data = []
+                        results_data = []
                     
                         # Generate report sections based on selected options
                         if peer_comparison:
@@ -436,6 +489,216 @@ def main():
                                 os.remove(temp_file)
                     
                     st.markdown('</div>', unsafe_allow_html=True)
+
+    # OMR Test Analysis Tab
+    with tab3:
+        st.header("OMR Test Analysis")
+        
+        # Instructions
+        st.markdown("""
+        ### Instructions
+        1. Configure the OMR sheet format
+        2. Upload a clear image of the correct answer OMR sheet
+        3. Upload student OMR answer sheets
+        4. Each sheet should have:
+           - Clear bubbles marked with dark pen/pencil
+           - All 4 corners visible
+           - Good lighting and no shadows
+        """)
+        
+        # OMR Configuration
+        st.subheader("OMR Configuration")
+        col1, col2 = st.columns(2)
+        with col1:
+            questions_count = st.number_input(
+                "Number of Questions",
+                min_value=1,
+                max_value=100,
+                value=20,
+                help="Enter the total number of questions in the OMR sheet"
+            )
+        with col2:
+            options_count = st.number_input(
+                "Options per Question",
+                min_value=2,
+                max_value=10,
+                value=5,
+                help="Enter the number of options per question (e.g., 5 for A,B,C,D,E)"
+            )
+        
+        # Configure button
+        if st.button("Configure OMR Format"):
+            if st.session_state.omr_processor.configure(questions_count, options_count):
+                st.success(f"✅ OMR format configured: {questions_count} questions with {options_count} options each")
+            else:
+                st.error("Failed to configure OMR format")
+        
+        st.markdown("---")
+        
+        # File upload for correct answer OMR sheet
+        correct_omr = st.file_uploader(
+            "Upload Correct Answer OMR Sheet",
+            type=["jpg", "jpeg", "png"],
+            key="correct_omr",
+            help="Upload the correct answer OMR sheet"
+        )
+        
+        # File upload for student OMR sheets
+        student_omr_sheets = st.file_uploader(
+            "Upload Student OMR Sheets",
+            type=["jpg", "jpeg", "png"],
+            key="student_omr",
+            accept_multiple_files=True,
+            help="Upload one or more student OMR answer sheets"
+        )
+        
+        if st.button("Evaluate OMR Sheets"):
+            if not st.session_state.omr_processor.is_configured:
+                st.error("Please configure the OMR format first!")
+            elif not correct_omr or not student_omr_sheets:
+                st.error("Please upload both correct answer sheet and student answer sheets!")
+            else:
+                # Process answer key first
+                if st.session_state.omr_processor.process_answer_key(correct_omr.getvalue()):
+                    st.success("✅ Answer key processed successfully!")
+                    st.markdown("### 📊 OMR Evaluation Results")
+                    
+                    # Create a DataFrame to store results
+                    results_data = []
+                    
+                    # Process each student's OMR sheet
+                    for student_sheet in student_omr_sheets:
+                        st.write(f"### Evaluating: {student_sheet.name}")
+                        
+                        result = st.session_state.omr_processor.evaluate_answer_sheet(student_sheet.getvalue())
+                        
+                        if result["status"] == "success":
+                            # Display results
+                            col1, col2 = st.columns([3, 1])
+                            with col1:
+                                st.write(f"Total Questions: {result['total_questions']}")
+                                st.write(f"Correct Answers: {result['correct_answers']}")
+                                
+                                # Display answer comparison
+                                st.markdown("#### Answer Comparison")
+                                
+                                # Store question-wise answers for Excel
+                                question_answers = []
+                                student_answers = result.get('marked_answers', [])
+                                correct_answers = result.get('correct_answers_key', [])
+                                
+                                for q_num in range(result['total_questions']):
+                                    student_ans = student_answers[q_num] if q_num < len(student_answers) else -1
+                                    correct_ans = correct_answers[q_num] if q_num < len(correct_answers) else -1
+                                    
+                                    student_choice = chr(65 + student_ans) if student_ans >= 0 else "No answer"
+                                    correct_choice = chr(65 + correct_ans) if correct_ans >= 0 else "No answer"
+                                    is_correct = student_ans == correct_ans
+                                    
+                                    st.write(
+                                        f"Q{q_num + 1}: Your answer: {student_choice} | "
+                                        f"Correct answer: {correct_choice} | "
+                                        f"{'✅' if is_correct else '❌'}"
+                                    )
+                                    
+                                    # Add to question answers
+                                    question_answers.append({
+                                        'Question': f'Q{q_num + 1}',
+                                        'Student Answer': student_choice,
+                                        'Correct Answer': correct_choice,
+                                        'Is Correct': '✓' if is_correct else '✗'
+                                    })
+                            
+                            with col2:
+                                st.metric(
+                                    "Score",
+                                    f"{result['score']:.1f}%"
+                                )
+                            
+                            # Add to results data with detailed answers
+                            results_data.append({
+                                "Student": os.path.splitext(student_sheet.name)[0],
+                                "Score": result['score'],
+                                "Correct": result['correct_answers'],
+                                "Total": result['total_questions'],
+                                "Question_Answers": question_answers
+                            })
+                        else:
+                            st.error(f"Evaluation failed: {result['message']}")
+                        
+                        st.markdown("---")
+                    
+                    # Display summary if there are results
+                    if results_data:
+                        st.markdown("### 📈 Class Summary")
+                        scores = [r['Score'] for r in results_data]
+                        st.write(f"Class Average: {sum(scores) / len(scores):.1f}%")
+                        st.write(f"Highest Score: {max(scores):.1f}%")
+                        st.write(f"Lowest Score: {min(scores):.1f}%")
+                        
+                        # Create Excel export if there are multiple students
+                        if len(results_data) > 1:
+                            st.markdown("### 📊 Export Results")
+                            
+                            # Create Excel file
+                            output = io.BytesIO()
+                            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                                # Summary sheet
+                                summary_data = []
+                                for r in results_data:
+                                    summary_data.append({
+                                        'Student': r['Student'],
+                                        'Score (%)': r['Score'],
+                                        'Correct Answers': r['Correct'],
+                                        'Total Questions': r['Total']
+                                    })
+                                
+                                summary_df = pd.DataFrame(summary_data)
+                                summary_df.loc['Average'] = ['Class Average', 
+                                                           summary_df['Score (%)'].mean(),
+                                                           summary_df['Correct Answers'].mean(),
+                                                           summary_df['Total Questions'].iloc[0]]
+                                summary_df.to_excel(writer, sheet_name='Summary', index=False)
+                                
+                                # Detailed analysis sheet
+                                detailed_data = []
+                                for result in results_data:
+                                    for qa in result['Question_Answers']:
+                                        detailed_data.append({
+                                            'Student': result['Student'],
+                                            'Question': qa['Question'],
+                                            'Student Answer': qa['Student Answer'],
+                                            'Correct Answer': qa['Correct Answer'],
+                                            'Is Correct': qa['Is Correct']
+                                        })
+                                
+                                detailed_df = pd.DataFrame(detailed_data)
+                                detailed_df.to_excel(writer, sheet_name='Detailed Analysis', index=False)
+                                
+                                # Auto-adjust column widths
+                                for sheet in writer.book.sheetnames:
+                                    ws = writer.book[sheet]
+                                    for column in ws.columns:
+                                        max_length = 0
+                                        column = [cell for cell in column]
+                                        for cell in column:
+                                            try:
+                                                if len(str(cell.value)) > max_length:
+                                                    max_length = len(cell.value)
+                                            except:
+                                                pass
+                                        adjusted_width = (max_length + 2)
+                                        ws.column_dimensions[column[0].column_letter].width = adjusted_width
+                            
+                            # Offer Excel download
+                            st.download_button(
+                                label="📥 Download Detailed Results (Excel)",
+                                data=output.getvalue(),
+                                file_name=f"omr_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                else:
+                    st.error("Failed to process answer key. Please ensure the image is clear and properly aligned.")
 
 if __name__ == "__main__":
     main() 
