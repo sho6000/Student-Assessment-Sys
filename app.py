@@ -12,6 +12,9 @@ from datetime import datetime
 import cv2
 import numpy as np
 import pandas as pd
+from streamlit_lottie import st_lottie
+import json
+import time
 
 # Initialize session states
 if 'ocr_results' not in st.session_state:
@@ -245,18 +248,43 @@ def main():
         page_icon="assets/pen.jpg",
         layout="wide"
     )
+
+    # # ✅ Create a placeholder for the loading animation
+    # placeholder = st.empty()
+
+    # # ✅ Load Lottie animation from a local JSON file
+    # with open("animation01.json", "r") as f:
+    #     lottie_animation = json.load(f)
+
+    # # ✅ Display the animation inside the placeholder
+    # with placeholder:
+    #     st_lottie(lottie_animation, speed=1, height=600, key="loading")
+    #     time.sleep(1)  # Simulate data loading (Replace with actual logic)
+
+    # # ✅ Remove the animation once loading is complete
+    # placeholder.empty()
+
     st.title("Student Assessment System")
 
     # Create tabs
     tab1, tab2, tab3 = st.tabs([
         "Answer Sheets Verification", 
         "Assignment Cross-Check Verification",
-        "OMR Test Analysis"
-    ])
+        "OMR Test Analysis"])
 
     # Answer Verification Tab
     with tab1:
         st.header("Answer Verification")
+
+        # Instructions
+        st.markdown("""
+        ### Instructions
+        1. Upload the "digitized" student answer sheets
+            - To digitize answer sheets, use the OCR button below
+        2. Upload the answer key
+        3. Select the analysis options you want to perform (Peer Comparison, Plagiarism Check, AI Detection)
+        4. Click on "Evaluate Answers" to get the analysis report
+        """)
         
         # File uploads with expanded file types
         student_answers = st.file_uploader(
@@ -266,6 +294,24 @@ def main():
             accept_multiple_files=True,
             help="Upload one or more student answer files"
         )
+
+        # Add OCR button for student answers
+        if student_answers and has_unprocessed_images(student_answers):
+            if st.button("Convert Images to Text (OCR)", key="ocr_button"):
+                with st.spinner("Processing images through OCR..."):
+                    progress_text = st.empty()
+                    for file in student_answers:
+                        if is_image_file(file.name) and file.name not in st.session_state.ocr_results:
+                            progress_text.write(f"Processing {file.name}...")
+                            text, error = process_ocr(file, lambda msg: progress_text.write(msg))
+                            if text:
+                                st.session_state.ocr_results[file.name] = text
+                                st.success(f"Successfully processed {file.name}")
+                            else:
+                                st.error(f"Failed to process {file.name}: {error}")
+                    progress_text.empty()
+                    st.success("OCR processing complete!")
+
         answer_key = st.file_uploader(
             "Upload Answer Key",
             type=["txt", "pdf", "docx", "doc", "jpg", "jpeg", "png"],
@@ -273,23 +319,106 @@ def main():
             help="Upload a single answer key file"
         )
 
+        # Add OCR button for answer key
+        if answer_key and is_image_file(answer_key.name) and answer_key.name not in st.session_state.ocr_results:
+            if st.button("Convert Answer Key to Text (OCR)", key="ocr_key_button"):
+                with st.spinner("Processing answer key through OCR..."):
+                    progress_text = st.empty()
+                    progress_text.write(f"Processing {answer_key.name}...")
+                    text, error = process_ocr(answer_key, lambda msg: progress_text.write(msg))
+                    if text:
+                        st.session_state.ocr_results[answer_key.name] = text
+                        st.success(f"Successfully processed {answer_key.name}")
+                    else:
+                        st.error(f"Failed to process {answer_key.name}: {error}")
+                    progress_text.empty()
+
+        # Check file count and manage checkbox states
+        current_file_count = len(student_answers) if student_answers else 0
+        
+        # Reset all checkboxes if all files are removed
+        if current_file_count == 0 and st.session_state.last_files_count > 0:
+            reset_checkboxes()
+        # Reset peer comparison if files are less than 2
+        elif current_file_count < 2 and st.session_state.last_files_count >= 2:
+            reset_peer_comparison()
+            
+        st.session_state.last_files_count = current_file_count
+
+        # Verification options
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            peer_comparison = st.checkbox(
+                "Compare Peer-to-Peer",
+                disabled=len(student_answers or []) < 2,
+                help="Upload at least 2 files to enable peer comparison",
+                value=st.session_state.checkboxes['peer_comparison'],
+                key='peercheck'
+            )
+        with col2:
+            plagiarism_check = st.checkbox(
+                "Plagiarism Check",
+                value=st.session_state.checkboxes['plagiarism_check'],
+                key='plagiarismcheck'
+            )
+        with col3:
+            ai_detection = st.checkbox(
+                "Detect AI-Generated Content",
+                value=st.session_state.checkboxes['ai_detection'],
+                key='aicheck'
+            )
+
+        # Update checkbox states
+        st.session_state.checkboxes['peer_comparison'] = peer_comparison
+        st.session_state.checkboxes['plagiarism_check'] = plagiarism_check
+        st.session_state.checkboxes['ai_detection'] = ai_detection
+
         if st.button("Evaluate Answers"):
             if not student_answers or not answer_key:
                 st.error("Please upload both student answers and answer key files!")
             else:
                 # Save answer key temporarily
                 temp_key_file = f"temp_key_{answer_key.name}"
-                with open(temp_key_file, "wb") as f:
-                    f.write(answer_key.getbuffer())
+                
+                # Use OCR result if available, otherwise use original file
+                if answer_key.name in st.session_state.ocr_results:
+                    with open(temp_key_file, "w", encoding='utf-8') as f:
+                        f.write(st.session_state.ocr_results[answer_key.name])
+                else:
+                    with open(temp_key_file, "wb") as f:
+                        f.write(answer_key.getbuffer())
+
+                # Read the answer key content for reuse with error handling
+                try:
+                    with open(temp_key_file, "r", encoding='utf-8') as f:
+                        answer_key_content = f.read().strip()
+                except UnicodeDecodeError:
+                    with open(temp_key_file, "r", encoding='latin-1') as f:
+                        answer_key_content = f.read().strip()
 
                 # Process each student answer
+                results_data = []
                 for student_answer in student_answers:
                     st.write(f"### Evaluating: {student_answer.name}")
                     
                     # Save student answer temporarily
                     temp_student_file = f"temp_student_{student_answer.name}"
-                    with open(temp_student_file, "wb") as f:
-                        f.write(student_answer.getbuffer())
+                    
+                    # Use OCR result if available, otherwise use original file
+                    if student_answer.name in st.session_state.ocr_results:
+                        with open(temp_student_file, "w", encoding='utf-8') as f:
+                            f.write(st.session_state.ocr_results[student_answer.name])
+                    else:
+                        with open(temp_student_file, "wb") as f:
+                            f.write(student_answer.getbuffer())
+
+                    # Read the student answer content for reuse with error handling
+                    try:
+                        with open(temp_student_file, "r", encoding='utf-8') as f:
+                            student_answer_content = f.read().strip()
+                    except UnicodeDecodeError:
+                        with open(temp_student_file, "r", encoding='latin-1') as f:
+                            student_answer_content = f.read().strip()
 
                     # Evaluate answers
                     result = evaluate_answers(temp_student_file, temp_key_file)
@@ -302,17 +431,139 @@ def main():
                         col1, col2 = st.columns([3, 1])
                         with col1:
                             st.write("Detailed Analysis:")
+                            
+                            # Add semantic similarity explanation based on category
+                            similarity_explanations = {
+                                "very_low": "Very low semantic similarity detected. The answer differs significantly from the expected content.",
+                                "low": "Low semantic similarity detected. The answer contains some relevant concepts but misses key points.",
+                                "moderate": "Moderate semantic similarity detected. The answer covers several key concepts but may lack depth or precision.",
+                                "high": "High semantic similarity detected. The answer covers most key concepts with good understanding.",
+                                "very_high": "Very high semantic similarity detected. The answer demonstrates excellent understanding of the concepts."
+                            }
+                            
+                            # Display semantic similarity explanation
+                            st.info(similarity_explanations[result["similarity_category"]])
+                            
+                            # Display detailed metrics
                             for detail in result["details"]:
                                 st.write(detail)
+                                
+                            # Add note about semantic similarity recognition
+                            if result["similarity_category"] in ["high", "very_high"]:
+                                st.success("✓ Semantically similar content recognized and scored appropriately.")
                         with col2:
+                            # Determine color based on score
+                            score_color = "normal"
+                            if result['overall_score'] < 30:
+                                score_color = "inverse"  # For low scores, use inverse (typically red)
+                                
                             st.metric(
                                 "Score",
-                                f"{result['overall_score']:.1f}%"
+                                f"{result['overall_score']:.1f}%",
+                                delta=None,
+                                delta_color=score_color
                             )
+                            
+                            # Add category label
+                            category_labels = {
+                                "very_low": "❌ Very Low",
+                                "low": "⚠️ Low",
+                                "moderate": "ℹ️ Moderate",
+                                "high": "✅ High",
+                                "very_high": "🌟 Excellent"
+                            }
+                            st.markdown(f"**Similarity Category:**  \n{category_labels[result['similarity_category']]}")
                     else:
                         st.error(f"Evaluation failed: {result['message']}")
                     
                     st.markdown("---")
+
+                with st.container():
+                    st.markdown("""
+                        <style>
+                        .report-container {
+                            background-color: rgba(89, 37, 193, 0.1);
+                            border-radius: 10px;
+                            padding: 20px;
+                            margin: 10px 0;
+                        }
+                        </style>
+                    """, unsafe_allow_html=True)
+                    
+                    st.markdown('<div class="report-container">', unsafe_allow_html=True)
+                    
+                    # Process files and generate report
+                    temp_files = []
+                    try:
+                        for student_answer in student_answers:
+                            temp_file = f"temp_{student_answer.name}"
+                            if student_answer.name in st.session_state.ocr_results:
+                                with open(temp_file, "w", encoding='utf-8') as f:
+                                    f.write(st.session_state.ocr_results[student_answer.name])
+                            else:
+                                with open(temp_file, "wb") as f:
+                                    f.write(student_answer.getbuffer())
+                            temp_files.append(temp_file)
+
+                        results_data = []
+                    
+                        # Generate report sections based on selected options
+                        if peer_comparison:
+                            results_data.extend(generate_peer_comparison(temp_files))
+                        if plagiarism_check:
+                            results_data.extend(generate_plagiarism_check(temp_files))
+                        if ai_detection:
+                            results_data.extend(generate_ai_detection(temp_files))
+
+                        # Generate and offer PDF download
+                        if results_data:
+                            pdf_bytes = generate_pdf_report(results_data)
+                            st.download_button(
+                                label="📥 Download PDF Report",
+                                data=pdf_bytes,
+                                file_name=f"analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                mime="application/pdf",
+                            )
+                            # Clear OCR results after successful report generation
+                            clear_ocr_results()
+                        else:
+                            st.warning("Please select at least one analysis option.")
+
+                    except Exception as e:
+                        st.error(f"An error occurred during report generation: {str(e)}")
+
+                    finally:
+                        # Clean up temporary files
+                        for temp_file in temp_files:
+                            if os.path.exists(temp_file):
+                                os.remove(temp_file)
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                # Call appropriate functions based on selected options
+                # if peer_comparison:
+                #     peer_results = generate_peer_comparison(student_answers)
+                #     if peer_results:
+                #         for section in peer_results:
+                #             st.markdown(f"### {section['title']}")
+                #             for content in section['content']:
+                #                 st.write(content)
+
+                # if plagiarism_check:
+                #     plagiarism_results = generate_plagiarism_check(student_answers)
+                #     if plagiarism_results:
+                #         for section in plagiarism_results:
+                #             st.markdown(f"### {section['title']}")
+                #             for content in section['content']:
+                #                 st.write(content)
+
+                # if ai_detection:
+                #     ai_results = generate_ai_detection(student_answers)
+                #     if ai_results:
+                #         for section in ai_results:
+                #             st.markdown(f"### {section['title']}")
+                #             for content in section['content']:
+                #                 st.write(content)
 
                 # Clean up answer key file
                 os.remove(temp_key_file)
@@ -320,6 +571,15 @@ def main():
     # Assignment Verification Tab
     with tab2:
         st.header("Assignment Verification")
+
+        # Instructions
+        st.markdown("""
+        ### Instructions
+        1. Upload the "digitized" student assignments
+            - To digitize assignments, use the OCR tool provided
+        2. Select the analysis options you want to perform (Peer Comparison, Plagiarism Check, AI Detection)
+        3. Click on "Generate Report" to get the analysis report
+        """)
         
         # File upload for assignments
         uploaded_files = st.file_uploader(
@@ -699,6 +959,70 @@ def main():
                             )
                 else:
                     st.error("Failed to process answer key. Please ensure the image is clear and properly aligned.")
+
+    # OCR Tool Tab
+    # with tab4:
+    #     st.header("Convert Images to Text (OCR)")
+
+    #     # Instructions
+    #     st.markdown("""
+    #     ### Instructions
+    #     1. Upload the image files
+    #     2. Click on "Apply OCR" to get the text document
+    #     """)
+        
+    #     # File uploads with expanded file types
+    #     img_files = st.file_uploader(
+    #         "Upload Image File",
+    #         type=["pdf", "docx", "doc", "jpg", "jpeg", "png"],
+    #         key="img_file",
+    #         help="Upload one or multiple image files",
+    #         accept_multiple_files=True 
+    #     )
+        
+    #     if st.button("Apply OCR") and img_files:
+    #         if img_files:
+    #             # Process the uploaded image file
+    #             image_files = [f for f in img_files if is_image_file(f.name)]
+    #             if not image_files:
+    #                 st.warning("No image files found to process. Upload JPG, JPEG, or PNG files.")
+    #             else:
+    #                 progress_bar = st.progress(0)
+    #                 total_files = len(image_files)
+                    
+    #                 for idx, file in enumerate(image_files):
+    #                     if not is_image_file(file.name):
+    #                         continue
+                            
+    #                     text, error = process_ocr(file, lambda msg: st.write(msg))
+    #                     if error:
+    #                         st.error(f"Error processing {file.name}: {error}")
+    #                     else:
+    #                         st.session_state.ocr_results[file.name] = text
+    #                     progress_bar.progress((idx + 1) / total_files)
+                    
+    #                 if st.session_state.ocr_results:
+    #                     st.success("Image processing completed successfully!")
+
+    #     # Display current OCR results
+    #     if st.session_state.ocr_results:
+    #         with st.expander("OCR Results", expanded=True):
+    #             for filename, text in st.session_state.ocr_results.items():
+    #                 st.markdown(f"### {filename}")
+    #                 st.text_area(
+    #                     "Extracted Text",
+    #                     value=text,
+    #                     height=200,
+    #                     key=f"ocr_display_{filename}"
+    #                 )
+    #                 st.download_button(
+    #                     label=f"Download OCR result",
+    #                     data=text.encode('utf-8'),
+    #                     file_name=f"{os.path.splitext(filename)[0]}_ocr.txt",
+    #                     mime="text/plain;charset=utf-8",
+    #                     key=f"download_display_{filename}"
+    #                 )
+    #                 st.markdown("---")
 
 if __name__ == "__main__":
     main() 

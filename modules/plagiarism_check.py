@@ -2,8 +2,54 @@ import google.generativeai as genai
 import os
 from dotenv import load_dotenv
 import PyPDF2
+import docx
 
 load_dotenv()
+
+def extract_text_from_pdf(file_path):
+    """
+    Extracts text from a PDF file using PyPDF2.
+    """
+    content = ""
+    try:
+        with open(file_path, 'rb') as file:
+            pdf_reader = PyPDF2.PdfReader(file)
+            for page in pdf_reader.pages:
+                content += page.extract_text() + "\n"
+    except Exception as e:
+        print(f"Error extracting text from PDF {file_path}: {e}")
+    return content
+
+def extract_text_from_docx(file_path):
+    """
+    Extracts text from a Word document using python-docx.
+    """
+    content = ""
+    try:
+        doc = docx.Document(file_path)
+        for paragraph in doc.paragraphs:
+            content += paragraph.text + "\n"
+    except Exception as e:
+        print(f"Error extracting text from Word document {file_path}: {e}")
+    return content
+
+def extract_text(file_path):
+    """
+    Extracts text from a file based on its extension.
+    Supports PDF, DOCX, and plain text files.
+    """
+    if file_path.lower().endswith('.pdf'):
+        return extract_text_from_pdf(file_path)
+    elif file_path.lower().endswith('.docx'):
+        return extract_text_from_docx(file_path)
+    else:
+        # Assume it's a plain text file
+        try:
+            with open(file_path, "r", encoding="utf-8") as file:
+                return file.read()
+        except Exception as e:
+            print(f"Error reading file {file_path}: {e}")
+            return ""
 
 def check_plagiarism(file_paths):
     """
@@ -18,15 +64,7 @@ def check_plagiarism(file_paths):
 
     for file_path in file_paths:
         try:
-            content = ""
-            if file_path.lower().endswith('.pdf'):
-                with open(file_path, 'rb') as file:
-                    pdf_reader = PyPDF2.PdfReader(file)
-                    for page in pdf_reader.pages:
-                        content += page.extract_text() + "\n"
-            else:
-                with open(file_path, "r", encoding="utf-8") as file:
-                    content = file.read()
+            content = extract_text(file_path)
 
             if not content.strip():
                 raise ValueError("No text content could be extracted from the file")
